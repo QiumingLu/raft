@@ -45,26 +45,74 @@ func (l *raftLog) String() string {
 
 func (l *raftLog) maybeAppend(index, logTerm, committed uint64, ents ...pb.Entry) (lastnewi uint64, ok bool) {
 	if l.matchTerm(index, logTerm) {
+		lastnewi = index + uint64(len(ents))
+		ci := l.findConflict(ents)
+		switch {
+		case ci == 0:
+		case ci <= l.committed:
+			l.logger.Panicf("entry %d conflict with committed entry [committed(%d]", ci, l.committed)
+		default:
+			offset := index + 1
+			l.append(ents[ci-offset:]...)
+		}
+		l.commitTo(min(committed, lastnewi))
+		return lastnewi, true
 	}
 	return 0, false
 }
 
 func (l *raftLog) append(ents ...pb.Entry) uint64 {
+	if len(ents) == 0 {
+		return l.lastIndex()
+	}
+	if after := ents[0].Index - 1; after < l.committed {
+		l.logger.Panicf("after(%d) is out of range [committed: %d]", after, l.committed)
+	}
+	l.unstable.truncateAndAppend(ents)
+	return l.lastIndex()
 }
 
 func (l *raftLog) findConflict(ents []pb.Entry) uint64 {
+	for _, ne := range ents {
+		if !l.matchTerm(ne.Index, ne.Term) {
+			if ne.Index <= l.lastIndex() {
+				l.logger.Infof("found conflict at index %d [exsiting term: %d, conflict term: %d]", ne.Index, l.zeroTermOnErrCompacted(l.term(ne.Index)), ne.Term)
+			}
+			return ne.Index
+		}
+	}
+	return 0
 }
 
 func (l *raftLog) unstableEntries() []pb.Entry {
+	if len(l.unstable.entries) == 0 {
+		return nil
+	}
+	return l.unstable.entries
 }
 
 func (l *raftLog) nextEnts() []pb.Entry {
+	off := max(l.applied+1, l.firstIndex())
+	if l.committed > off {
+		ents, err := l.slice(off, l.committed+1, noLimit)
+		if err != nil {
+			l.logger.Panicf("unexpected error when getting unapplied entries (%v)", err)
+		}
+		return ents
+	}
+	return nil
 }
 
 func (l *raftLog) hasNextEnts() bool {
+	off := max(l.applied+1, l.firstIndex())
+	return l.committed+1 > off
 }
 
 func (l *raftLog) snapshot() (pb.Snapshot, error) {
+	if l.unstable.snapshot != nil {
+		return *l.unstable.snapshot, nil
+	}
+	return l.storage.Snapshot()
 }
 
 func (l *raftLog) firstIndex() uint64 {
@@ -103,7 +151,7 @@ func (l *raftLog) appliedTo(i uint64) {
 		return
 	}
 	if l.committed < i || i < l.applied {
-		l.logger.Panicf("applied(%d) is out of range [prevApplied(%d), committed(%d)]", i, l.applied, l.commited)
+		l.logger.Panicf("applied(%d) is out of range [prevApplied(%d), committed(%d)]", i, l.applied, l.committed)
 	}
 	l.applied = i
 }
