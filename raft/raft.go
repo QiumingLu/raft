@@ -25,6 +25,13 @@ const (
 	numStates
 )
 
+type ReadOnlyOption int
+
+const (
+	ReadOnlySafe ReadOnlyOption = itoa
+	ReadOnlyLeaseBased
+)
+
 type StateType uint64
 
 var stmap = [...]string{
@@ -36,4 +43,10 @@ var stmap = [...]string{
 
 func (st StateType) String() string {
 	return stmap[uint64(st)]
+}
+
+type Config struct {
+}
+
+type raft struct {
 }
