@@ -238,6 +238,39 @@ func (l *raftLog) restore(s pb.Snapshot) {
 }
 
 func (l *raftLog) slice(lo, hi, maxSize uint64) ([]pb.Entry, error) {
+	err := l.mustCheckOutOfBounds(lo, hi)
+	if err != nil {
+		return nil, err
+	}
+	if lo == hi {
+		return nil, nil
+	}
+	var ents []pb.Entry
+	if lo < l.unstable.offset {
+		storedEnts, err := l.storage.Entries(lo, min(hi, l.unstable.offset), maxSize)
+		if err == ErrCompacted {
+			return nil, err
+		} else if err == ErrUnavailable {
+			l.logger.Panicf("entries[%d:%d] is unavailable from storage", lo, min(hi, l.unstable.offset))
+		} else if err != nil {
+			panic(err)
+		}
+
+		if uint64(len(storedEnts)) < min(hi, l.unstable.offset)-lo {
+			return storedEnts, nil
+		}
+		ents = storedEnts
+	}
+	if hi > l.unstable.offset {
+		unstable := l.unstable.slice(max(lo, l.unstable.offset), hi)
+		if len(ents) > 0 {
+			ents = append([]pb.Entry{}, ents...)
+			ents = append(ents, unstable...)
+		} else {
+			ents = unstable
+		}
+	}
+	return limitSize(ents, maxSize), nil
 }
 
 func (l *raftLog) mustCheckOutOfBounds(lo, hi uint64) error {
